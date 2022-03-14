@@ -1,7 +1,6 @@
 # MEGH
 
-## MEGH: A parametric class of general hazard models for clustered survival
-data
+## MEGH: A parametric class of general hazard models for clustered survival data
 
 This repository contains a real data example of the clustered survival models proposed in the paper:
 
