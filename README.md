@@ -1,4 +1,4 @@
-# MEGH
+# MEGH R package
 
 ## MEGH: A parametric class of general hazard models for clustered survival data
 
