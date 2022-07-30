@@ -21,4 +21,4 @@ An example of the use of this package using real data can be found at:
 
 [MEGH: A parametric class of general hazard models for clustered survival, Leukemia data set](https://rpubs.com/FJRubio/MEGHLeuk)
 
-See also: [GHSurv](https://github.com/FJRubio67/GHSurv)
+See also: [GHSurv](https://github.com/FJRubio67/GHSurv), [HazReg](https://github.com/FJRubio67/HazReg)
