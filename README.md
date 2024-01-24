@@ -6,6 +6,8 @@ This repository contains a real data application of the clustered survival model
 
  > Rubio, F.J. and Drikvandi, R. (2022). MEGH: A parametric class of general hazard models for clustered survival data. Statistical Methods in Medical Research, 31(8) 1603–1616. https://doi.org/10.1177%2F09622802221102620
 
+> <img src="https://github.com/FJRubio67/MEGH/assets/33929387/9aa5d701-bbe9-4aea-a732-4f65905ba5e0" width="300" height="300">
+
 [[Preprint](https://drive.google.com/file/d/1YjHkOKYWK_4gZNt8kMAk6YqndI9mJ_aI/view?usp=sharing)] [[Supplementary Material](https://drive.google.com/file/d/1A4V3eRCl23tinv7XLKAk4Fek6d0q0Uwe/view?usp=sharing)] [[Journal](https://doi.org/10.1177%2F09622802221102620)]
 
 The models are fitted using the R package `MEGH`. To install the `MEGH` R package use:
