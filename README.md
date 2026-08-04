@@ -60,7 +60,7 @@ dependence in survival times.
 
 ## Tutorial
 
-- [MEGH: Leukemia data set](https://rpubs.com/FJRubio/MEGHLeuk) — illustrative
+- [MEGH: Leukemia data set](https://fjrubio-meghleuk.share.connect.posit.cloud/) — illustrative
   real-data application of MEGH models to leukaemia survival data
 
 ## Citation
