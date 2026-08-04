@@ -1,0 +1,615 @@
+---
+title: "MEGH: A parametric class of mixed-effects general hazard models"
+author: '[F. Javier Rubio](https://sites.google.com/site/fjavierrubio67/) and Reza Drikvandi'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+bibliography: references.bib
+---
+
+# Leukemia data set and Survival Models
+
+We analyse a data set (`LeukSurv`) on  survival of acute myeloid leukemia available in the R package *spBayesSurv* [@zhou:2018], which contains information about  $n = 1043$ patients. 
+We use information about survival time (years), vital status at the end of follow-up (0 - right-censored, 1 - dead), age (in years), sex (0 - female, 1 - male), white blood cell count at diagnosis (*wbc*, truncated at 500), the Townsend score (*tpi*, higher values indicates less affluent areas), and administrative district of residence (*district*, 24 districts). We fit models with hazard structures ME-I and ME-II [@rubio:2021]; 
+$$
+h_1(t_{ij}\mid {\bf x}_{ij}, {\bf u}_i) = h_0\left(t_{ij} \exp\left\{\tilde{{\bf x}}_{ij}^{\top}\alpha\right\}\right)\exp\left\{{\bf x}_{ij}^{\top}\beta + {\bf z}_{ij}^{\top}{\bf u}_i \right\},	
+$$
+
+$$
+h_2(t_{ij}\mid {\bf x}_{ij}, {\bf u}_i) = h_0\left(t_{ij} \exp\left\{\tilde{{\bf x}}_{ij}^{\top}\alpha + {\bf z}_{ij}^{\top}{\bf u}_i \right\}\right)\exp\left\{{\bf x}_{ij}^{\top}\beta + {\bf z}_{ij}^{\top}{\bf u}_i \right\},	
+$$
+
+with PGW and log-logistic baseline hazards; and normal, Student-$t$ and two-piece normal random effects distributions.
+In all models, we consider the time dependent effect of age (normalised), and the hazard-level effects of age (normalised), sex, *wbc* and *tpi*. The variable *district* is used to define the random effects in the two mixed hazard structures considered. In addition, we fit the models without random effects in order to assess the need for including them.
+
+
+# Data preparation
+```{r, message=FALSE}
+rm(list = ls())
+# install_github("FJRubio67/GHSurv")
+library(GHSurv)
+# install_github("FJRubio67/MEGH")
+library(MEGH)
+# install_github("FJRubio67/twopiece")
+library(twopiece)
+library(knitr)
+library(survival)
+library(matrixStats)
+library(numDeriv)
+library(spBayesSurv)
+library(mvtnorm)
+library(BayesX)
+library(R2BayesX)
+library(sp)
+library(fields)
+library(surveillance)
+library(ggplot2)
+library(latex2exp)
+library(Rmisc)
+library(matrixcalc)
+library(survminer)
+library(MASS)
+
+#----------------------------------------------------------------------------------------------
+# Example: Leukemia data
+#---------------------------------------------------------------------------------------------
+
+data(LeukSurv)
+?LeukSurv
+head(LeukSurv)
+dim(LeukSurv)
+
+#******************
+# Data preparation
+#******************
+
+n.ind <- dim(LeukSurv)[1]  # number of individuals
+n.clust <- length(unique(LeukSurv$district)) # number of clusters
+# Design matrices
+X <- as.matrix(cbind(scale(LeukSurv$age), LeukSurv$sex, scale(LeukSurv$wbc), scale(LeukSurv$tpi) ))
+colnames(X) <- cbind("std age", "sex", "wbc", "tpi")
+Xt <- as.matrix(cbind(scale(LeukSurv$age)))
+q <- dim(Xt)[2]
+p <- dim(X)[2]
+r <- n.clust
+
+# Histogram of survival times
+hist(LeukSurv$time/365.24, breaks = 50, probability = T, 
+     xlab = "Time (years)", ylab = "Density", main = "LeukSurv")
+box()
+
+# Required quantities
+status <- as.vector(LeukSurv$cens)
+times <- as.vector(LeukSurv$time)/365.24 # in years
+ID <- as.vector(LeukSurv$district)
+n.obs <- sum(status)
+
+# Checking design matrices
+
+# random-effects design matrix test 
+ZID <- matrix(0, ncol = r, nrow = n.ind)
+for(i in 1:n.ind) ZID[i,ID[i]] <- 1
+
+MZ <- as.matrix(t(ZID)%*%ZID)
+MZ.obs <- as.matrix(t(ZID[as.logical(status),])%*%ZID[as.logical(status),])
+
+is.singular.matrix(MZ)
+
+is.singular.matrix(MZ.obs)
+
+# Hazard scale design matrix test
+MX <- as.matrix(t(X)%*%X)
+MX.obs <- as.matrix(t(X[as.logical(status),])%*%X[as.logical(status),])
+
+is.singular.matrix(MX)
+is.singular.matrix(MX.obs)
+
+# Time scale design matrix test
+MXt <- as.matrix(t(Xt)%*%Xt)
+MXt.obs <- as.matrix(t(Xt[as.logical(status),])%*%Xt[as.logical(status),])
+
+is.singular.matrix(MXt)
+is.singular.matrix(MXt.obs)
+
+################################################################################
+# Comparison of Kaplan-Meier curves by district
+################################################################################
+
+fit <- survfit(Surv(time, cens) ~ district,
+               data = LeukSurv)
+
+
+ggsurvplot(fit, data = LeukSurv, risk.table = FALSE, linetype = 1, palette = "grey")
+
+################################################################################
+# G-rho test to compare the survival curves by district
+################################################################################
+
+surv_diff <- survdiff(Surv(time, cens) ~ district, data = LeukSurv)
+surv_diff
+```
+
+# Models without random effects
+```{r}
+############################################################
+# Ignoring random effects
+############################################################
+
+# Optimisation step
+
+# LN baseline
+OPT0 <- GHMLE(init = rep(0,2+p+q), times = times, status = status, hstr = "LNGH",
+              des = X, des_t = Xt, method = "nlminb", maxit = 10000)
+# PGW baseline
+OPT1 <- GHMLE(init = rep(0,3+p+q), times = times, status = status, hstr = "PGWGH",
+              des = X, des_t = Xt, method = "nlminb", maxit = 10000)
+# GG baseline
+OPT2 <- GHMLE(init = rep(0,2+p+q), times = times, status = status, hstr = "GGH",
+              des = X, des_t = Xt, method = "nlminb", maxit = 10000)
+# LL baseline
+OPT3 <- GHMLE(init = rep(0,2+p+q), times = times, status = status, hstr = "LLGH",
+              des = X, des_t = Xt, method = "nlminb", maxit = 10000)
+
+# Comparing models without random effects
+AIC00 <- 2*OPT0$OPT$objective + 2*length(OPT0$OPT$par)
+AIC01 <- 2*OPT1$OPT$objective + 2*length(OPT1$OPT$par)
+AIC02 <- 2*OPT2$OPT$objective + 2*length(OPT2$OPT$par)
+AIC03 <- 2*OPT3$OPT$objective + 2*length(OPT3$OPT$par)
+
+AIC0s <- c(AIC00,AIC01,AIC02,AIC03)
+which.min(AIC0s)
+
+# Best model is the one with log-logistic baseline hazard
+MLE <- c(OPT3$OPT$par[1],exp(OPT3$OPT$par[2]),OPT3$OPT$par[-c(1:2)])
+AIC0 <- 2*OPT3$OPT$objective + 2*length(OPT3$OPT$par)
+```
+
+# Models with random effects
+
+```{r}
+
+############################################################
+# Models with random effects
+############################################################
+
+#--------------------------------
+# Required quantities
+#--------------------------------
+
+#------------------------------------------------
+# Marginal likelihoods
+#------------------------------------------------
+
+# Normal random effects (PGW baseline)
+ml1 <- function(par) -ml1_PGW_rep(par = par, times, status, des = X, des_t = Xt, n.clust = n.clust)
+ml2 <- function(par) -ml2_PGW_rep(par = par, times, status, des = X, des_t = Xt, n.clust = n.clust)
+
+# Student-t random effects (PGW baseline)
+tml1 <- function(par) -tml1_PGW_rep(par = par, times, status, des = X, des_t = Xt, n.clust = n.clust)
+tml2 <- function(par) -tml2_PGW_rep(par = par, times, status, des = X, des_t = Xt, n.clust = n.clust)
+
+# Student-t random effects (PGW baseline)
+tpnml1 <- function(par) -tpnml1_PGW_rep(par = par, times, status, des = X, des_t = Xt, n.clust = n.clust)
+tpnml2 <- function(par) -tpnml2_PGW_rep(par = par, times, status, des = X, des_t = Xt, n.clust = n.clust)
+
+# Normal random effects (log-logistic baseline)
+ml11 <- function(par) -ml1_LL_rep(par = par, times, status, des = X, des_t = Xt, n.clust = n.clust)
+ml21 <- function(par) -ml2_LL_rep(par = par, times, status, des = X, des_t = Xt, n.clust = n.clust)
+
+# Student-t random effects (log-logistic baseline)
+tml11 <- function(par) -tml1_LL_rep(par = par, times, status, des = X, des_t = Xt, n.clust = n.clust)
+tml21 <- function(par) -tml2_LL_rep(par = par, times, status, des = X, des_t = Xt, n.clust = n.clust)
+
+# Student-t random effects (log-logistic baseline)
+tpnml11 <- function(par) -tpnml1_LL_rep(par = par, times, status, des = X, des_t = Xt, n.clust = n.clust)
+tpnml21 <- function(par) -tpnml2_LL_rep(par = par, times, status, des = X, des_t = Xt, n.clust = n.clust)
+
+#------------------------------------------------
+# Optimisation
+#------------------------------------------------
+
+# Normal random effects (PGW baseline)
+OPTMEN1 <- nlminb(c(0,OPT1$OPT$par), ml1, control = list(iter.max = 10000))
+OPTMEN2 <- nlminb(c(0,OPT1$OPT$par), ml2, control = list(iter.max = 10000))
+
+# Student-t random effects (PGW baseline)
+OPTMET1 <- nlminb(c(0,1,OPT1$OPT$par), tml1, control = list(iter.max = 10000))
+OPTMET2 <- nlminb(c(0,1,OPT1$OPT$par), tml2, control = list(iter.max = 10000))
+
+# TPN random effects (PGW baseline)
+OPTMETPN1 <- nlminb(c(0,0,OPT1$OPT$par), tpnml1, control = list(iter.max = 10000))
+OPTMETPN2 <- nlminb(c(0,0,OPT1$OPT$par), tpnml2, control = list(iter.max = 10000))
+
+# Normal random effects (log-logistic baseline)
+OPTMEN11 <- nlminb(c(0,OPT3$OPT$par), ml11, control = list(iter.max = 10000))
+OPTMEN21 <- nlminb(c(0,OPT3$OPT$par), ml21, control = list(iter.max = 10000))
+
+# Student-t random effects (log-logistic baseline)
+OPTMET11 <- nlminb(c(0,1,OPT3$OPT$par), tml11, control = list(iter.max = 10000))
+OPTMET21 <- nlminb(c(0,1,OPT3$OPT$par), tml21, control = list(iter.max = 10000))
+
+# TPN random effects (log-logistic baseline)
+OPTMETPN11 <- nlminb(c(0,0,OPT3$OPT$par), tpnml11, control = list(iter.max = 10000))
+OPTMETPN21 <- nlminb(c(0,0,OPT3$OPT$par), tpnml21, control = list(iter.max = 10000))
+
+
+#------------------------------------------------
+# Marginal Maximum Likelihood Estimators
+#------------------------------------------------
+
+# PGW
+MMLEN1 <- c(exp(OPTMEN1$par[1:4]),OPTMEN1$par[-c(1:4)])
+MMLEN2 <- c(exp(OPTMEN2$par[1:4]),OPTMEN2$par[-c(1:4)])
+
+MMLET1 <- c(exp(OPTMEN1$par[1:5]),OPTMET1$par[-c(1:5)])
+MMLET2 <- c(exp(OPTMEN2$par[1:5]),OPTMET2$par[-c(1:5)])
+
+MMLETPN1 <- c(exp(OPTMETPN1$par[1]),tanh(OPTMETPN1$par[2]),exp(OPTMETPN1$par[3:5]),OPTMETPN1$par[-c(1:5)])
+MMLETPN2 <- c(exp(OPTMETPN2$par[1]),tanh(OPTMETPN2$par[2]),exp(OPTMETPN2$par[3:5]),OPTMETPN2$par[-c(1:5)])
+
+# Log logistic
+MMLEN11 <- c(exp(OPTMEN11$par[1]),OPTMEN11$par[2],exp(OPTMEN11$par[3]),OPTMEN11$par[-c(1:3)])
+MMLEN21 <- c(exp(OPTMEN21$par[1]),OPTMEN21$par[2],exp(OPTMEN21$par[3]),OPTMEN21$par[-c(1:3)])
+
+MMLET11 <- c(exp(OPTMET11$par[1:2]),OPTMET11$par[3],exp(OPTMET11$par[4]),OPTMET11$par[-c(1:4)])
+MMLET21 <- c(exp(OPTMET21$par[1:2]),OPTMET21$par[3],exp(OPTMET21$par[4]),OPTMET21$par[-c(1:4)])
+
+MMLETPN11 <- c(exp(OPTMETPN11$par[1]),tanh(OPTMETPN11$par[2]),OPTMETPN11$par[3],exp(OPTMETPN11$par[4]),OPTMETPN11$par[-c(1:4)])
+MMLETPN21 <- c(exp(OPTMETPN21$par[1]),tanh(OPTMETPN21$par[2]),OPTMETPN21$par[3],exp(OPTMETPN21$par[4]),OPTMETPN21$par[-c(1:4)])
+```
+
+# Model Comparison
+
+```{r}
+#------------------------------------------------
+# AIC for mixed models
+#------------------------------------------------
+AIC1 <- 2*OPTMEN1$objective + 2*length(OPTMEN1$par)
+AIC2 <- 2*OPTMEN2$objective + 2*length(OPTMEN2$par)
+
+AICT1 <- 2*OPTMET1$objective + 2*length(OPTMET1$par)
+AICT2 <- 2*OPTMET2$objective + 2*length(OPTMET2$par)
+
+AICTPN1 <- 2*OPTMETPN1$objective + 2*length(OPTMETPN1$par)
+AICTPN2 <- 2*OPTMETPN2$objective + 2*length(OPTMETPN2$par)
+
+AIC11 <- 2*OPTMEN11$objective + 2*length(OPTMEN11$par)
+AIC21 <- 2*OPTMEN21$objective + 2*length(OPTMEN21$par)
+
+AICT11 <- 2*OPTMET11$objective + 2*length(OPTMET11$par)
+AICT21 <- 2*OPTMET21$objective + 2*length(OPTMET21$par)
+
+AICTPN11 <- 2*OPTMETPN11$objective + 2*length(OPTMETPN11$par)
+AICTPN21 <- 2*OPTMETPN21$objective + 2*length(OPTMETPN21$par)
+
+#-----------------------------------------------------------------
+# Model comparison: no RE, MEGH-I, MEGH-II
+#-----------------------------------------------------------------
+
+AICs <- c(AIC0,AIC1,AIC2,AICT1,AICT2,AICTPN1,AICTPN2,
+          AIC11,AIC21,AICT11,AICT21,AICTPN11,AICTPN21)
+
+min(AICs)
+
+ind.min <- which.min(AICs)
+ind.min
+
+# Best model
+mod.names <- c("LL", "PGW-N1", "PGW-N2", "PGW-T1", "PGW-T2", "PGW-TPN1", "PGW-TPN2",
+               "LL-N1", "LL-N2", "LL-T1", "LL-T2", "LL-TPN1", "LL-TPN2")
+
+mod.names[ind.min]
+
+OPTME <- OPTMEN11
+
+#-----------------------------------------------------------------
+# MLE vs. MMLE comparison
+#-----------------------------------------------------------------
+
+EST <- as.matrix(cbind(c(NA,MLE), MMLEN11))
+colnames(EST) <- c("MLE", "MMLE")
+
+kable(EST, digits = 3)
+```
+
+
+# Likelihood Ratio Test
+
+```{r}
+#############################################################
+#Likelihood ratio test (LRT) for testing the random effect u
+# log-logistic baseline
+#############################################################
+LRT_statistic <- -2*(OPTMEN11$objective-OPT3$OPT$objective)
+#test for random effects based on the mixture of chi-squared distributions
+p_value=.5*(1-pchisq(LRT_statistic,0))+.5*(1-pchisq(LRT_statistic,1))
+print(paste("p_value=",p_value))
+if(p_value<0.05){print("Here we can reject H0:sigma=0, so the random effect is significant and must be present in the model")}else{print("Here we cannot reject H0:sigma=0, so the random effect is not significant and must be removed from the model")}
+```
+
+# Gradient Function
+
+## Normal random effects
+
+```{r}
+############################################################
+#Gradient function with new confidence bounds for log-logistic baseline
+############################################################
+
+# MMLES of the best model in the original scale
+ MMLE <- c(exp(OPTMEN11$par[1]),OPTMEN11$par[2],exp(OPTMEN11$par[3]),OPTMEN11$par[-c(1:3)])
+
+#for normal random effects
+new_ml1 <- function(par) -ml1_LL(par = par, times, status, des = X, des_t = Xt, n.clust = n.clust)
+def_ml1 <- function(pars){
+  return(new_ml1(pars))
+}
+hess <- hessian(def_ml1,x=MMLE)
+FisherS <- solve(hess)
+M=n.clust
+set.seed(1)
+MMLEsim <- mvrnorm(n=M,mu=MMLE, Sigma=FisherS)
+
+#calculate the actual gradient values
+ind.min <- 8
+uu <- seq(-3,3,by=0.05) #uu is a grid of random effect points
+ratio <- numeric(r)
+gradient <- numeric(length(uu))
+for(k in 1:length(uu))
+{
+  for(i in 1:r)
+  {
+    if(ind.min==8)
+    {
+      MMLE <- c(exp(OPTMEN11$par[1]),OPTMEN11$par[2],exp(OPTMEN11$par[3]),OPTMEN11$par[-c(1:3)])
+      num <- exp(log_likCInd1_LL(MMLE[-1],uu[k],times, status, des = X, des_t = Xt, index = i))
+      den <- exp(ml1Ind_LL(MMLE,times, status, des = X, des_t = Xt, index = i))
+    } else if(ind.min==9)
+    {
+      MMLE <- c(exp(OPTMEN21$par[1]),OPTMEN21$par[2],exp(OPTMEN21$par[3]),OPTMEN21$par[-c(1:3)])
+      num <- exp(log_likCInd2_LL(MMLE[-1],uu[k],times, status, des = X, des_t = Xt, index = i))
+      den <- exp(ml2Ind_LL(MMLE,times, status, des = X, des_t = Xt, index = i))
+    }
+    ratio[i] <- num/den
+  }
+  gradient[k] <- mean(ratio)
+}
+  
+  #calculate the new confidence bands for gradient
+  ind.min=8
+  gradient_sim <- matrix(0,length(uu),M)
+  ratio <- numeric(r)
+  gradient_lower <- numeric(length(uu))
+  gradient_upper <- numeric(length(uu))
+  for(k in 1:length(uu))
+  {
+   for(m in 1:M)
+    {
+     for(i in 1:r)
+     {
+        #for ind.min==8
+        MMLEs <- MMLEsim[m,]
+        num <- exp(log_likCInd1_LL(MMLEs[-1],uu[k],times, status, des = X, des_t = Xt, index = i))
+        den <- exp(ml1Ind_LL(MMLEs,times, status, des = X, des_t = Xt, index = i))
+        ratio[i] <- num/den
+     }
+     gradient_sim[k,m] <- mean(ratio)
+   }
+    gradient_upper[k] <- gradient[k]+qt(df=M-1,0.975)*sd(gradient_sim[k,])/sqrt(M)
+    gradient_lower[k] <- gradient[k]-qt(df=M-1,0.975)*sd(gradient_sim[k,])/sqrt(M)
+    #gradient_upper[k] <- quantile(gradient_sim[k,],0.975)
+    #gradient_lower[k] <- quantile(gradient_sim[k,],0.025)
+    #gradient_CI <- CI(gradient_sim[k,], ci=0.95)
+    #gradient_upper[k] <- gradient_CI[1]
+    #gradient_lower[k] <- gradient_CI[3]
+ }
+
+#use ggplot to plot the gradient function with the pointwise confidence bands
+gradient_curve <- rep(1,length(gradient))
+lower <- rep(2,length(gradient_lower))
+upper <- rep(3,length(gradient_upper))
+gradient_data <- cbind(c(uu,uu,uu),c(gradient,gradient_lower,gradient_upper),c(gradient_curve,lower,upper))
+gradient_data <- as.data.frame(gradient_data)
+colnames(gradient_data) <- c("RE_point","Gradient","bounds")
+gradient_data$`bounds` <- factor(gradient_data$`bounds`,levels=c("1","2","3"))
+gradient_data$`bounds` <- factor(gradient_data$`bounds`,levels=c("1","2","3"))
+levels(gradient_data$`bounds`) <- c("Gradient_curve", "Lower","Upper")
+ggplot(data=gradient_data, aes(x=RE_point, y=Gradient, group=bounds)) +
+  geom_line(aes(colour=bounds, linetype=bounds), size=1) +
+  scale_colour_manual(values = c("Gradient_curve"="blue", "Lower"="black", "Upper"="black")) +
+  xlab(TeX("Random effect point \\textit{$u$}")) + ylab("Gradient function") +
+  theme(axis.text.x = element_text(color="black", size = 25,vjust = -0.3), axis.text.y = element_text(color="black", size = 25,vjust = 0.3)) +
+  theme(axis.ticks.x = element_line(size = 1), axis.ticks.y = element_line(size = 1), axis.ticks.length=unit(0.2,"cm")) +
+  theme(axis.title.x=element_text(vjust=-0.5),axis.title.y=element_text(vjust=1.2)) +
+  scale_x_continuous(breaks = c(-3,-2,-1,0,1,2,3)) +
+  scale_y_continuous(breaks = c(0,0.5,1,1.5)) +
+  theme(axis.title.y = element_text(size = rel(2), angle=90)) +
+  theme(axis.title.x = element_text(size = rel(2), angle=0,face="italic")) +
+  theme(legend.position="none",legend.background = element_rect(color = "grey", fill = "white", size = 1),
+        legend.text=element_text(size=25)) + geom_hline(yintercept=1)+
+  expand_limits(y=c(0,1.5))
+```
+
+## two-piece normal random effects
+
+```{r}
+#for two-piece normal random effects with new gradient bands
+new_tpnml1 <- function(par) -tpnml1_LL(par = par, times, status, des = X, des_t = Xt, n.clust = n.clust)
+def_tpnml1 <- function(pars){
+  return(new_tpnml1(pars))
+}
+MMLETPN <- c(exp(OPTMETPN11$par[1]),tanh(OPTMETPN11$par[2]),OPTMETPN11$par[3],exp(OPTMETPN11$par[4]),OPTMETPN11$par[-c(1:4)])
+hess_tpm <- hessian(def_tpnml1,x=MMLETPN)
+FisherS_tpm <- solve(hess_tpm)
+M=n.clust
+set.seed(1)
+MMLETPNsim <- mvrnorm(n=M,mu=MMLETPN, Sigma=FisherS_tpm)
+
+#calculate the actual gradient values
+ind.min=12
+uu <- seq(-3,3,by=0.05) #uu is a grid of random effect points
+ratio <- numeric(r)
+gradient <- numeric(length(uu))
+for(k in 1:length(uu))
+{
+  for(i in 1:r)
+  {
+    if(ind.min==12)
+    {
+      MMLETPN <- c(exp(OPTMETPN11$par[1]),tanh(OPTMETPN11$par[2]),OPTMETPN11$par[3],exp(OPTMETPN11$par[4]),OPTMETPN11$par[-c(1:4)])
+      num <- exp(log_likCInd1_LL(MMLETPN[-c(1,2)],uu[k],times, status, des = X, des_t = Xt, index = i))
+      den <- exp(tpnml1Ind_LL(MMLETPN,times, status, des = X, des_t = Xt, index = i))
+    } else if(ind.min==13)
+    {
+      MMLETPN <- c(exp(OPTMETPN21$par[1]),tanh(OPTMETPN21$par[2]),OPTMETPN21$par[3],exp(OPTMETPN21$par[4]),OPTMETPN21$par[-c(1:4)])
+      num <- exp(log_likCInd2_LL(MMLETPN[-c(1,2)],uu[k],times, status, des = X, des_t = Xt, index = i))
+      den <- exp(tpnml2Ind_LL(MMLETPN,times, status, des = X, des_t = Xt, index = i))
+    }
+    ratio[i] <- num/den
+  }
+  gradient[k] <- mean(ratio)
+}
+
+#calculate the new confidence bands for gradient
+ind.min=12
+gradient_sim <- matrix(0,length(uu),M)
+ratio <- numeric(r)
+gradient_lower <- numeric(length(uu))
+gradient_upper <- numeric(length(uu))
+for(k in 1:length(uu))
+{
+  for(m in 1:M)
+  {
+    for(i in 1:r)
+    {
+      #for ind.min==12
+      MMLETPNs <- MMLETPNsim[m,]
+      num <- exp(log_likCInd1_LL(MMLETPNs[-c(1,2)],uu[k],times, status, des = X, des_t = Xt, index = i))
+      den <- exp(tpnml1Ind_LL(MMLETPNs,times, status, des = X, des_t = Xt, index = i))
+      ratio[i] <- num/den
+    }
+    gradient_sim[k,m] <- mean(ratio)
+  }
+  gradient_upper[k] <- gradient[k]+qt(df=M-1,0.975)*sd(gradient_sim[k,])/sqrt(M)
+  gradient_lower[k] <- gradient[k]-qt(df=M-1,0.975)*sd(gradient_sim[k,])/sqrt(M)
+  #gradient_upper[k] <- quantile(gradient_sim[k,],0.975)
+  #gradient_lower[k] <- quantile(gradient_sim[k,],0.025)
+  #gradient_CI <- CI(gradient_sim[k,], ci=0.95)
+  #gradient_upper[k] <- gradient_CI[1]
+  #gradient_lower[k] <- gradient_CI[3]
+}
+
+#use ggplot to plot the gradient function with the pointwise confidence bands
+gradient_curve <- rep(1,length(gradient))
+lower <- rep(2,length(gradient_lower))
+upper <- rep(3,length(gradient_upper))
+gradient_data <- cbind(c(uu,uu,uu),c(gradient,gradient_lower,gradient_upper),c(gradient_curve,lower,upper))
+gradient_data <- as.data.frame(gradient_data)
+colnames(gradient_data) <- c("RE_point","Gradient","bounds")
+gradient_data$`bounds` <- factor(gradient_data$`bounds`,levels=c("1","2","3"))
+gradient_data$`bounds` <- factor(gradient_data$`bounds`,levels=c("1","2","3"))
+levels(gradient_data$`bounds`) <- c("Gradient_curve", "Lower","Upper")
+ggplot(data=gradient_data, aes(x=RE_point, y=Gradient, group=bounds)) +
+  geom_line(aes(colour=bounds, linetype=bounds), size=1) +
+  scale_colour_manual(values = c("Gradient_curve"="blue", "Lower"="black", "Upper"="black")) +
+  xlab(TeX("Random effect point \\textit{$u$}")) + ylab("Gradient function") +
+  theme(axis.text.x = element_text(color="black", size = 25,vjust = -0.3), axis.text.y = element_text(color="black", size = 25,vjust = 0.3)) +
+  theme(axis.ticks.x = element_line(size = 1), axis.ticks.y = element_line(size = 1), axis.ticks.length=unit(0.2,"cm")) +
+  theme(axis.title.x=element_text(vjust=-0.5),axis.title.y=element_text(vjust=1.2)) +
+  scale_x_continuous(breaks = c(-3,-2,-1,0,1,2,3)) +
+  scale_y_continuous(breaks = c(0,0.5,1,1.5)) +
+  theme(axis.title.y = element_text(size = rel(2), angle=90)) +
+  theme(axis.title.x = element_text(size = rel(2), angle=0,face="italic")) +
+  theme(legend.position="none",legend.background = element_rect(color = "grey", fill = "white", size = 1),
+        legend.text=element_text(size=25)) + geom_hline(yintercept=1)+
+  expand_limits(y=c(0,1.5))
+```
+
+# Estimates comparison
+
+```{r}
+# Confidence interval (positive parameters are in the log-scale and the skewness parameter in tanh scale)
+CIm1 <- Conf.Int(ml11,OPTMEN11$par,level=0.95)
+CIm2 <- Conf.Int(ml21,OPTMEN21$par,level=0.95)
+CIm0 <- Conf.Int(FUN=OPT3$loglik,MLE = OPT3$OPT$par,level=0.95)
+
+# Transforming the CIs to the original scale
+CIm1[c(1,3),] <- exp(CIm1[c(1,3),] )
+CIm2[c(1,3),] <- exp(CIm2[c(1,3),] )
+CIm0[c(1),] <- exp(CIm0[c(1),] )
+
+kable(CIm0[,-4], digits = 3)
+kable(CIm1[,-4], digits = 3)
+kable(CIm2[,-4], digits = 3)
+
+
+# MMLES of the best model in the original scale
+MMLE <- c(exp(OPTME$par[1]),OPTME$par[2],exp(OPTME$par[3]),OPTME$par[-c(1:3)])
+
+# Comparing MLE and MMLE
+round(MLE, digits = 3)
+
+round(MMLE, digits = 3)
+```
+
+
+# Marginal Survival Maps
+```{r}
+
+########################################################################################################
+# Maps of marginal survival functions at times t = 1, 5 years
+########################################################################################################
+
+# Map object
+nwengland <- read.bnd(system.file("otherdata/nwengland.bnd",
+                                  package = "spBayesSurv"))
+
+nwsp = bnd2sp(nwengland)
+
+# Aggregated data
+surv1 <- surv5 <- vector()
+
+for(i in 1:r) surv1[i] <- MSurvLL1(1, par= MMLE, des = X, des_t = Xt, index = i, NMC = 10000)
+for(i in 1:r) surv5[i] <- MSurvLL1(5, par= MMLE, des = X, des_t = Xt, index = i, NMC = 10000)
+
+
+psurvs1 = SpatialPolygonsDataFrame(nwsp, aggregate(surv1[LeukSurv$district],
+                                                   list(d=LeukSurv$district),
+                                                   function(v){mean(v)}))
+
+psurvs5 = SpatialPolygonsDataFrame(nwsp, aggregate(surv5[LeukSurv$district],
+                                                   list(d=LeukSurv$district),
+                                                   function(v){mean(v)}))
+
+map.tpi = SpatialPolygonsDataFrame(nwsp, aggregate(LeukSurv$tpi,
+                                                   list(d=LeukSurv$district),
+                                                   function(v){mean(v)}))
+
+
+map.age = SpatialPolygonsDataFrame(nwsp, aggregate(LeukSurv$age,
+                                                   list(d=LeukSurv$district),
+                                                   function(v){mean(v)}))
+
+library(RColorBrewer)
+
+#colorscheme <- gray.colors(256)
+
+colorscheme <- adjustcolor(colorRampPalette(brewer.pal(n=9, 'RdYlGn'))(100), 1)
+
+# Map plots of survival and Townsend score
+li1 <- layout.labels(map.tpi, labels = list(font=1, labels="district"))
+li2 <- layout.scalebar(map.tpi, scale = 5, corner = c(-1, -1))
+
+spplot(map.tpi,"x", sp.layout = c(list(li1), li2), col = "black", col.regions = rev(colorscheme), xlab = "Townsend score")
+
+spplot(map.age,"x", sp.layout = c(list(li1), li2), col = "black", col.regions = rev(colorscheme), xlab = "Age")
+
+spplot(psurvs1,"x", sp.layout = c(list(li1), li2), col = "black", col.regions = colorscheme[51:70], xlab = "1-year Survival")
+
+spplot(psurvs5,"x", sp.layout = c(list(li1), li2), col = "black", col.regions = colorscheme[11:50], xlab = "5-year Survival")
+
+```
+
+# References
