@@ -62,6 +62,7 @@ dependence in survival times.
 
 - [MEGH: Leukemia data set](https://fjrubio-meghleuk.share.connect.posit.cloud/) — illustrative
   real-data application of MEGH models to leukaemia survival data
+- [simMEGH: Simulating from mixed-effects general hazard models (MEGH)](https://019fdb7e-0eb9-a53e-708d-fdb216b147f4.share.connect.posit.cloud/)
 
 ## Citation
 
