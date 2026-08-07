@@ -1,0 +1,226 @@
+---
+title: "Simulating from mixed-effects general hazard models (MEGH)"
+author: '[F. Javier Rubio](https://sites.google.com/site/fjavierrubio67/) and Reza Drikvandi'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+bibliography: references.bib
+---
+
+# MEGH Structure
+
+The MEGH model was proposed by @rubio:2021 in terms of the hazard function:
+Let $o_{ij} \in {\mathbb R}_+$, $j=1,\dots,n_i$, $i=1,\dots,r$, be a sample of  times-to-event of interest, and ${\bf x}_{ij}\in{\mathbb R}^p$ be a vector of covariates associated to the $ij$th individual. Let $c_{ij} \in {\mathbb R}_+$ be the right-censoring indicators, and $t_{ij} = \min\{o_{ij},c_{ij}\}$ be the observed survival times. Let $d_{ij} = I(o_{ij} < c_{ij})$ be the vital status indicators (1 - dead, 0 - alive), and $n = \sum_{i = 1}^r n_i$ be the total sample size.
+We propose the mixed-effects general hazards (MEGH) model, which is defined through the individual hazard function:
+$$
+h(t_{ij}\mid {\bf x}_{ij}, {\bf u}_i, \tilde{{\bf u}}_i) = h_0\left(t_{ij} \exp\left\{\tilde{{\bf x}}_{ij}^{\top}\mathbf{\alpha} + \tilde{{\bf z}}_{ij}^{\top}\tilde{{\bf u}}_i \right\}\right)\exp\left\{{\bf x}_{ij}^{\top}\mathbf{\beta} + {\bf z}_{ij}^{\top}{\bf u}_i \right\},	
+$$
+where $h_0(\cdot)$ is a baseline hazard, $\mathbf{\beta}=(\beta_1,\ldots,\beta_p)^\top \in \mathbb{R}^p$, $\mathbf{\alpha}=(\alpha_1,\ldots,\alpha_q)^\top \in \mathbb{R}^{\tilde{p}}$, 
+${{\bf x}}_{ij}\in \mathbb{R}^p$ is a vector of covariates affecting the hazard scale, $\tilde{{\bf x}}_{ij} \in \mathbb{R}^{\tilde{p}}$ is a vector of covariates affecting the time scale (typically, $\tilde{{\bf x}}_{ij} \subset {\bf x}_{ij}$), and $({\bf u}_i,\tilde{{\bf u}}_i) \stackrel{iid}{\sim} G_{q+\tilde{q}}$, where $G_{q+\tilde{q}}$ is a continuous distribution with support on ${\mathbb R}^{q + \tilde{q}}$. 
+
+Suppose that $q=\tilde{q} = 1$ and that $G_{q+\tilde{q}}$ is a bivariate normal distribution with zero mean and covariance matrix $\Sigma$. The following R code shows how to simulate from the MEGH model under these assumptions for specific values of the parameters and a baseline hazard given by the [Power Generalised Weibull](https://rpubs.com/FJRubio/PGW) distribution. In order to avoid simulating design matrices, we will use the real data set `LeukSurv` from the R package `spBayesSurv`.
+
+```{r}
+##############################################################################################
+# MEGH
+##############################################################################################
+
+# Required packages
+library(mvtnorm)
+#library(devtools)
+#install_github("FJRubio67/MEGH")
+library(MEGH)
+library(spBayesSurv)
+
+#********************************************************
+# Design matrices and ID indicators based on real data
+#********************************************************
+
+data(LeukSurv)
+#View(LeukSurv)
+#dim(LeukSurv)
+
+X <- as.matrix(cbind(scale(LeukSurv$age), LeukSurv$sex, scale(LeukSurv$wbc), scale(LeukSurv$tpi) ))
+colnames(X) <- cbind("std age", "sex", "wbc", "tpi")
+Xt <- as.matrix(cbind(scale(LeukSurv$age)))
+n.ind <- dim(X)[1]  # number of individuals
+n.clust <- length(unique(LeukSurv$district)) # number of clusters
+q <- dim(Xt)[2]
+p <- dim(X)[2]
+r <- n.clust
+ID <- as.vector(LeukSurv$district)
+
+
+#True values of the parameters
+Sigma <- cbind(c(1,0.5),c(0.5,1))
+alpha <- 0.96 
+beta <- c(1.00,0.08,0.22,0.10) 
+theta <- c(0.2,1.50,3.0)
+true_parameters <- c(sigma,theta,alpha,beta)
+npar <- length(true_parameters)
+cens <- 4 # censoring times
+
+
+#********************************************************
+# Simulation
+#********************************************************
+#*
+simulated_survival <- simMEGH(seed=1234, des=X, des_t=Xt, ID=ID, 
+                              alpha=alpha, beta=beta, theta=theta, Sigma=Sigma, 
+                              cens=rep(cens,n.ind), restr="GENERAL", distr="PGW")  
+
+summary(simulated_survival)
+
+# Histogram of survival times
+hist(simulated_survival$times, xlab = "times", ylab ="density", probability = TRUE, main = "")
+box()
+
+# Proportion of observed survival times
+mean(simulated_survival$status)
+
+```
+
+# MEGH-I and MEGH-II sub-structures
+
+@rubio:2021 proposed two sub-structures of the MEGH structure.
+
+## MEGH-I Structure
+The first proposed mixed effects hazard structure is:
+$$
+h_1(t_{ij}\mid {\bf x}_{ij}, {\bf u}_i) = h_0\left(t_{ij} \exp\left\{\tilde{{\bf x}}_{ij}^{\top}\mathbf{\alpha}\right\}\right)\exp\left\{{\bf x}_{ij}^{\top}\mathbf{\beta} + {\bf z}_{ij}^{\top}{\bf u}_i \right\},	
+$$
+
+This mixed hazard structure contains the mixed effects proportional hazards (MEPH, $\mathbf{\alpha} = 0$) model @therneau:2000, while allowing for the inclusion of time-dependent effects through the parameter $\mathbf{\alpha}$.  
+
+The following R code shows how to simulate from the MEGH-I model under these assumptions for specific values of the parameters and a baseline hazard given by the [Power Generalised Weibull](https://rpubs.com/FJRubio/PGW) distribution. In order to avoid simulating design matrices, we will use the real data set `LeukSurv` from the R package `spBayesSurv`.
+
+```{r}
+##############################################################################################
+# MEGH-I
+##############################################################################################
+
+# Required packages
+library(mvtnorm)
+library(MEGH)
+library(spBayesSurv)
+
+#********************************************************
+# Design matrices and ID indicators based on real data
+#********************************************************
+
+data(LeukSurv)
+#View(LeukSurv)
+#dim(LeukSurv)
+
+X <- as.matrix(cbind(scale(LeukSurv$age), LeukSurv$sex, scale(LeukSurv$wbc), scale(LeukSurv$tpi) ))
+colnames(X) <- cbind("std age", "sex", "wbc", "tpi")
+Xt <- as.matrix(cbind(scale(LeukSurv$age)))
+n.ind <- dim(X)[1]  # number of individuals
+n.clust <- length(unique(LeukSurv$district)) # number of clusters
+q <- dim(Xt)[2]
+p <- dim(X)[2]
+r <- n.clust
+ID <- as.vector(LeukSurv$district)
+
+
+#True values of the parameters
+Sigma <- 1
+alpha <- 0.96 
+beta <- c(1.00,0.08,0.22,0.10) 
+theta <- c(0.2,1.50,3.0)
+true_parameters <- c(sigma,theta,alpha,beta)
+npar <- length(true_parameters)
+cens <- 4 # censoring times
+
+
+#********************************************************
+# Simulation
+#********************************************************
+#*
+simulated_survival <- simMEGH(seed=1234, des=X, des_t=Xt, ID=ID, 
+                              alpha=alpha, beta=beta, theta=theta, Sigma=Sigma, 
+                              cens=rep(cens,n.ind), restr="I", distr="PGW")  
+
+summary(simulated_survival)
+
+# Histogram of survival times
+hist(simulated_survival$times, xlab = "times", ylab ="density", probability = TRUE, main = "")
+box()
+
+# Proportion of observed survival times
+mean(simulated_survival$status)
+```
+
+
+## MEGH-II Structure
+The second proposed mixed effects hazard structure is:
+$$
+h_2(t_{ij}\mid {\bf x}_{ij}, {\bf u}_i) = h_0\left(t_{ij} \exp\left\{\tilde{{\bf x}}_{ij}^{\top}\mathbf{\alpha} + {\bf z}_{ij}^{\top}{\bf u}_i \right\}\right)\exp\left\{{\bf x}_{ij}^{\top}\mathbf{\beta} + {\bf z}_{ij}^{\top}{\bf u}_i \right\},	
+$$
+
+This mixed hazard structure generalises the mixed effects accelerated failure time (MEAFT, $\mathbf{\alpha}=\mathbf{\beta}$) structure (see \emph{e.g.}~@rubio:2018b). Moreover, if no random effects are included, then we obtain the proportional hazards (PH) model for $\mathbf{\alpha}=0$, the accelerated failure time (AFT) model for $\mathbf{\alpha}=\mathbf{\beta}$, and the accelerated hazards (AH) model for $\mathbf{\beta}=0$ \citep{chen:2001}. Figure \ref{fig:diag} shows the link between MEGH and some submodels of interest. Note that the MEGH is much richer than that, but this structure illustrates the generality of the proposed mixed structure.
+
+The following R code shows how to simulate from the MEGH-II model under these assumptions for specific values of the parameters and a baseline hazard given by the [Power Generalised Weibull](https://rpubs.com/FJRubio/PGW) distribution. In order to avoid simulating design matrices, we will use the real data set `LeukSurv` from the R package `spBayesSurv`.
+
+```{r}
+##############################################################################################
+# MEGH-II
+##############################################################################################
+
+# Required packages
+library(mvtnorm)
+library(MEGH)
+library(spBayesSurv)
+
+#********************************************************
+# Design matrices and ID indicators based on real data
+#********************************************************
+
+data(LeukSurv)
+#View(LeukSurv)
+#dim(LeukSurv)
+
+X <- as.matrix(cbind(scale(LeukSurv$age), LeukSurv$sex, scale(LeukSurv$wbc), scale(LeukSurv$tpi) ))
+colnames(X) <- cbind("std age", "sex", "wbc", "tpi")
+Xt <- as.matrix(cbind(scale(LeukSurv$age)))
+n.ind <- dim(X)[1]  # number of individuals
+n.clust <- length(unique(LeukSurv$district)) # number of clusters
+q <- dim(Xt)[2]
+p <- dim(X)[2]
+r <- n.clust
+ID <- as.vector(LeukSurv$district)
+
+
+#True values of the parameters
+Sigma <- 1
+alpha <- 0.96 
+beta <- c(1.00,0.08,0.22,0.10) 
+theta <- c(0.2,1.50,3.0)
+true_parameters <- c(sigma,theta,alpha,beta)
+npar <- length(true_parameters)
+cens <- 4 # censoring times
+
+
+#********************************************************
+# Simulation
+#********************************************************
+#*
+simulated_survival <- simMEGH(seed=1234, des=X, des_t=Xt, ID=ID, 
+                              alpha=alpha, beta=beta, theta=theta, Sigma=Sigma, 
+                              cens=rep(cens,n.ind), restr="II", distr="PGW")  
+
+summary(simulated_survival)
+
+# Histogram of survival times
+hist(simulated_survival$times, xlab = "times", ylab ="density", probability = TRUE, main = "")
+box()
+
+# Proportion of observed survival times
+mean(simulated_survival$status)
+
+
+```
+
+# References
